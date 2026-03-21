@@ -33,14 +33,17 @@ class JSONFormatter(logging.Formatter):
             log_record["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_record)
 
-def setup_logging(log_dir="logs", backup_count=7):
+def setup_logging(log_dir="logs", backup_count=7, log_level=logging.INFO, **kwargs):
     """Initialize logging configuration with time-based rotation and separate streams."""
     if not os.path.exists(log_dir):
         os.makedirs(log_dir, exist_ok=True)
         
-    def configure_stream(name, filename, to_stdout=False):
+    def configure_stream(name, filename, to_sys=None):
         logger = logging.getLogger(name)
-        logger.setLevel(logging.INFO)
+        
+        # Parse log level correctly if passed as string
+        level = log_level if isinstance(log_level, int) else getattr(logging, str(log_level).upper(), logging.INFO)
+        logger.setLevel(level)
         logger.propagate = False
         
         # Clear existing handlers
@@ -57,16 +60,16 @@ def setup_logging(log_dir="logs", backup_count=7):
         file_handler.setFormatter(JSONFormatter())
         logger.addHandler(file_handler)
         
-        if to_stdout:
-            stream_handler = logging.StreamHandler(sys.stdout)
+        if to_sys:
+            stream_handler = logging.StreamHandler(to_sys)
             stream_handler.setFormatter(JSONFormatter())
             logger.addHandler(stream_handler)
         return logger
 
-    configure_stream("access", "access.log", to_stdout=False)
-    configure_stream("application", "app.log", to_stdout=True)
-    configure_stream("error", "error.log", to_stdout=True)
-    configure_stream("audit", "audit.log", to_stdout=False)
+    configure_stream("access", "access.log")
+    configure_stream("application", "app.log", to_sys=sys.stdout)
+    configure_stream("error", "error.log", to_sys=sys.stderr)
+    configure_stream("audit", "audit.log")
     
 _logging_setup_done = False
 
@@ -92,9 +95,13 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         
         # Check for Audit paths using explicit match or strictly defined prefix
-        is_audit = (path in ["/api/auth/login", "/api/auth/logout"] 
-                    or path.startswith("/api/payout/")
-                    or path.startswith("/api/admin/bounty/status/"))
+        is_audit = (
+            path in ["/api/auth/login", "/api/auth/logout", "/auth/login", "/auth/logout"] 
+            or path.startswith("/api/payout/")
+            or path.startswith("/api/webhooks")
+            or (path.startswith("/api/bounties") and request.method in ["POST", "PUT", "PATCH", "DELETE"])
+            or path.startswith("/api/admin/bounty/status/")
+        )
         
         try:
             response = await call_next(request)
@@ -143,9 +150,16 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
                 extra={"correlation_id": correlation_id, "extra_info": error_data}
             )
             
-            # Non-intrusive exception routing: just raise it
-            # Let FastAPI and standard HTTP exception handlers do their job
-            raise e
+            # Non-intrusive exception routing: return JSON directly
+            return JSONResponse(
+                status_code=500,
+                headers={"X-Correlation-ID": correlation_id},
+                content={
+                    "error": "Internal Server Error",
+                    "correlation_id": correlation_id,
+                    "message": "An unexpected error occurred. Please contact support with the correlation ID."
+                }
+            )
 
 def handle_error(exception):
     """Fallback utility for other manual scopes"""

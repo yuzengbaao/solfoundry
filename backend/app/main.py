@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler for startup and shutdown."""
-    setup_logging(log_dir='logs', max_bytes=10485760, backup_count=5)
+    setup_logging(log_dir='logs', backup_count=5)
     await init_db()
     await ws_manager.init()
 
@@ -98,38 +98,6 @@ app.add_middleware(
 
 from src.middleware.logging import _get_logger
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    try:
-        path = request.url.path
-        method = request.method
-    except Exception:
-        path = "unknown"
-        method = "unknown"
-        
-    error_data = {
-        "stream": "error",
-        "path": path,
-        "method": method,
-        "error_type": type(exc).__name__,
-        "duration_ms": 0.0 # Time calc here might not be accurate, handled in middleware
-    }
-    
-    _get_logger("error").error(
-        "Unhandled exception occurred", 
-        extra={"correlation_id": correlation_id, "extra_info": error_data}
-    )
-    
-    return JSONResponse(
-        status_code=500,
-        headers={"X-Correlation-ID": correlation_id},
-        content={
-            "error": "Internal Server Error", 
-            "correlation_id": correlation_id,
-            "message": "An unexpected error occurred. Please contact support with the correlation ID."
-        }
-    )
 
 # ── Route Registration ──────────────────────────────────────────────────────
 # Auth: /auth/* (prefix defined in router)

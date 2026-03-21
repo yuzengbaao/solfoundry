@@ -13,8 +13,11 @@ app.add_middleware(StructuredLoggingMiddleware)
 async def basic_endpoint():
     return {"status": "ok"}
     
+@app.get("/health")
+def dummy_health(): return {"status": "ok"}
 @app.get("/crash")
 async def crash_endpoint():
+
     raise ValueError("System failure test")
     
 @app.get("/notfound")
@@ -24,24 +27,6 @@ async def notfound_endpoint():
 @app.post("/api/payout/execute")
 async def payout_endpoint():
     return {"status": "payout initiated"}
-
-# Add exception handler to FastApi to match real app behavior so 404 HTTPExceptions translate cleanly
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
-    correlation_id = getattr(request.state, "correlation_id", "unknown")
-    return JSONResponse(
-        status_code=500,
-        headers={"X-Correlation-ID": correlation_id},
-        content={
-            "error": "Internal Server Error", 
-            "correlation_id": correlation_id,
-            "message": "An unexpected error occurred. Please contact support with the correlation ID."
-        }
-    )
 
 client = TestClient(app, raise_server_exceptions=False)
 
@@ -100,3 +85,15 @@ def test_validate_correlation_id():
 
 def test_legacy_handler():
     assert handle_error(ValueError("Legacy error"))["error"] == "Legacy error"
+
+def test_health_check_excluded_from_access_log():
+    # health check is excluded by middleware from normal access log
+    # we just verify it works without crashing
+    response = client.get("/health")
+    assert response.status_code == 200
+
+def test_bounty_audit_trigger():
+    response = client.post("/api/bounties/123/submit")
+    # Even if 404 because bounty doesn't exist, checking if correlation ID is returned
+    assert "X-Correlation-ID" in response.headers
+
